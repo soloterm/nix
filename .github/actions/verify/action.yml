@@ -1,0 +1,27 @@
+name: Verify the package
+description: Build Solo, check its layout, and launch it on NixOS.
+runs:
+  using: composite
+  steps:
+    - name: Build the package
+      shell: bash
+      run: nix build .#solo -L --print-out-paths
+
+    - name: Check the installed layout
+      shell: bash
+      run: nix shell --inputs-from . nixpkgs#patchelf -c bash ci/check-layout.sh result
+
+    - name: Launch Solo on NixOS
+      shell: bash
+      run: |
+        nix build .#checks.x86_64-linux.launch -L -o launch-result
+        mkdir -p launch-screenshot
+        cp -L launch-result/*.png launch-screenshot/
+
+    - name: Upload the launch screenshot
+      if: always()
+      uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+      with:
+        name: solo-launch-${{ github.run_id }}-${{ github.run_attempt }}
+        path: launch-screenshot/
+        if-no-files-found: ignore

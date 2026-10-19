@@ -1,0 +1,64 @@
+name: Track the published release
+
+# soloterm.com decides when a release reaches everyone (after any staged
+# rollout). Follow its public update manifest, verify the new AppImage, and
+# commit the new source.json only after the package builds and launches.
+on:
+  schedule:
+    - cron: '23 * * * *'
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: track-release
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: write
+      issues: write
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: DeterminateSystems/nix-installer-action@3138316df39ed29be04236d7ffc686fa525866aa # v23
+
+      - name: Read soloterm.com's published Linux release
+        id: update
+        run: |
+          nix shell --inputs-from . nixpkgs#minisign nixpkgs#jq -c ./update.sh
+          # Flakes only see tracked files.
+          git add source.json 2>/dev/null || true
+
+      - name: Verify the new release
+        if: steps.update.outputs.updated
+        uses: ./.github/actions/verify
+
+      - name: Commit the new release
+        if: steps.update.outputs.updated
+        env:
+          VERSION: ${{ steps.update.outputs.updated }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add source.json
+          git commit -m "solo: $VERSION"
+          git push origin HEAD:main
+
+      - name: Open or update the tracking issue
+        if: failure() && github.event_name == 'schedule'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.update.outputs.updated }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          title="The published Solo release could not be packaged"
+          body="Packaging ${VERSION:-the published release} failed: ${RUN_URL}"
+          existing=$(gh issue list --state open --search "\"$title\" in:title" --json number --jq '.[0].number // empty')
+          if [[ -n $existing ]]; then
+            gh issue comment "$existing" --body "$body"
+          else
+            gh issue create --title "$title" --body "$body"
+          fi
